@@ -38,17 +38,18 @@ class ClipClassifier(L.LightningModule):
         self.linear1 = nn.Linear(self.clip_model.config.projection_dim, 256)
         self.linear2 = nn.Linear(256, 128)
         self.linear3 = nn.Linear(128, num_classes)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.3)
 
     def forward(self, images):
         with torch.no_grad():
             inputs = clip_processor(images=images, return_tensors="pt", do_rescale=False).to(self.device)
             embeddings = self.clip_model.get_image_features(**inputs)
-            x = nn.functional.relu(self.linear1(embeddings))
-            x = self.dropout(x)
-            x = nn.functional.relu(self.linear2(x))
-            x = self.dropout(x)
-            return self.linear3(x)
+        x = nn.functional.relu(self.linear1(embeddings))
+        x = self.dropout(x)
+        x = nn.functional.relu(self.linear2(x))
+        x = self.dropout(x)
+        x = self.linear3(x)
+        return x
 
     def training_step(self, batch, batch_idx):
         images, labels = batch
@@ -59,7 +60,7 @@ class ClipClassifier(L.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3, weight_decay=1e-3)
-    
+
     def on_train_epoch_end(self):
         test_evaluation(self, test_loader)
         
@@ -86,7 +87,7 @@ def test_evaluation(model, data_loader):
 num_classes = 101
 model = ClipClassifier(clip_model, num_classes)
 
-trainer = L.Trainer(max_epochs = 10, logger=run, log_every_n_steps=10)
+trainer = L.Trainer(max_epochs = 10, log_every_n_steps=10)
 trainer.fit(model, train_loader, test_loader)
 
 wandb.finish()
