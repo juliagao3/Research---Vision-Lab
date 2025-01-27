@@ -1,6 +1,8 @@
 # load the dataset
 import os
 import torch
+from torchgen.dest.register_dispatch_key import gen_resize_out_helper
+
 import numpy as np
 from glob import glob
 from tqdm import tqdm
@@ -20,7 +22,7 @@ from unsupervised_keypoints.eval import pixel_from_weighted_avg, find_max_pixel,
 from unsupervised_keypoints.invertable_transform import RandomAffineWithInverse
 
 import matplotlib.pyplot as plt
-
+import torchvision
 
 def save_img(map, img, name):
     # save with matplotlib
@@ -102,7 +104,7 @@ def plot_point_single(img, points, name):
     plt.savefig(name, bbox_inches='tight', pad_inches=0, dpi=300)
     plt.close(fig)
 
-def plot_point_correspondences(imgs, points, name, height = 11, width = 9):
+def plot_point_correspondences(imgs, points, name, height = 11, width = 9, ground_truth=False):
     """
     Displays corresponding points per image
     len(imgs) = num_images
@@ -119,9 +121,18 @@ def plot_point_correspondences(imgs, points, name, height = 11, width = 9):
 
         for j in range(num_points):
             # plot the points each as a different type of marker
-            axs[i].scatter(
-                points[i, j, 1] * 512.0, points[i, j, 0] * 512.0, marker=f"${j}$"
-            )
+            x = points[i, j, 1] * 512
+            y = points[i, j, 0] * 512
+
+            if ground_truth:
+                if 0 <= x <= 512 and 0 <= y <= 512:
+                    axs[i].scatter(
+                        y, x, marker=f"${j}$"
+                    )
+            else:
+                axs[i].scatter(
+                    x, y, marker=f"${j}$"
+                )
 
     # remove axis and handle any unused subplots
     for i, ax in enumerate(axs):
@@ -163,8 +174,8 @@ def visualize_attn_maps(
     controllers=None,
     num_gpus=1,
     max_loc_strategy="argmax",
-    height = 2,
-    width = 2,
+    height = 11,
+    width = 9,
     validation = False,
 ):
     if dataset_name == "celeba_aligned":
@@ -232,6 +243,12 @@ def visualize_attn_maps(
         maps.append(map.cpu())
     maps = torch.stack(maps)
     gt_kpts = torch.stack(gt_kpts)
+
+
+    gt_kpts = gt_kpts / torch.tensor([640, 360])
+    plot_point_correspondences(
+        imgs, gt_kpts, os.path.join(save_folder, "gt_keypoints.pdf"), height, width, ground_truth=True
+    )
 
     if max_loc_strategy == "argmax":
         points = find_max_pixel(maps.view(height * width * num_points, 512, 512)) / 512.0
@@ -390,3 +407,139 @@ def create_vid(
     # import json
     # with open(os.path.join(save_folder, "keypoints.json"), "w") as f:
     #     json.dump(keypoints.tolist(), f)
+
+# def _calc_distances(preds, targets, mask, normalize):
+#     print("preds", preds)
+#     print("targets", targets)
+#     N, K, D = preds.shape
+#     #_mask[(normalize == 0).sum(1).nonzero(as_tuple=True)[0], :] = False
+#     distances = torch.full((N, K), -1, dtype=torch.float32)
+#     #normalize[normalize <= 0] = 1e6
+#
+#     for i in range(N):
+#         for j in range(K):
+#             if mask[i, j] == 1:
+#                 distance = (preds[i, j] - targets[i, j]) / normalize[i, :]
+#                 distances[i, j] = torch.norm(distance)
+#
+#     print("calc distances", distances)
+#     return distances.T
+
+# def _distance_acc(distances, threshold=0.05):
+#     print("distances", distances)
+#     distance_valid = distances != -1
+#     num_distance_valid = distance_valid.sum()
+#     if num_distance_valid > 0:
+#         print((distances[distance_valid] < threshold).sum())
+#         return (distances[distance_valid] < threshold).sum() / num_distance_valid
+#     return -1
+#
+# def keypoint_pck_accuracy(preds, targets, mask, threshold, normalize):
+#     distances = _calc_distances(preds, targets, mask, normalize)
+#
+#     acc = np.array([_distance_acc(d, threshold) for d in distances])
+#     print("acc", acc)
+#     valid_acc = []
+#     for a in acc:
+#         if a <= 0:
+#             continue
+#         else:
+#             valid_acc.append(a)
+#     print(valid_acc)
+#     count = len(valid_acc)
+#     avg_acc = np.mean(valid_acc) if count > 0 else 0
+#     return acc, avg_acc, count
+#
+# def evaluate(
+#         ldm,
+#         context,
+#         indices,
+#         device="cuda",
+#         from_where=["down_cross", "mid_cross", "up_cross"],
+#         upsample_res=32,
+#         layers=[0, 1, 2, 3, 4, 5],
+#         lr=5e-3,
+#         noise_level=-1,
+#         num_tokens=1000,
+#         num_points=30,
+#         num_images=100,
+#         regressor=None,
+#         augment_degrees=30,
+#         augment_scale=(0.9, 1.1),
+#         augment_translate=(0.1, 0.1),
+#         augmentation_iterations=20,
+#         dataset_loc="~",
+#         save_folder="outputs",
+#         visualize=False,
+#         dataset_name="celeba_aligned",
+#         controllers=None,
+#         num_gpus=1,
+#         max_loc_strategy="argmax",
+#         height=11,
+#         width=9,
+#         validation=False,
+# ):
+#     dataset = custom_images.CustomDataset(data_root=dataset_loc, image_size=512)
+#
+#     imgs = []
+#     maps = []
+#     gt_kpts = []
+#     masks = []
+#
+#     # random permute the dataset
+#     randperm = torch.randperm(len(dataset))
+#
+#     for i in tqdm(range(height * width)):
+#         batch = dataset[randperm[i % len(dataset)].item()]
+#
+#         img = batch["img"]
+#
+#         _gt_kpts = batch["kpts"]
+#         gt_kpts.append(_gt_kpts)
+#         imgs.append(img.cpu())
+#
+#         mask = batch["mask"]
+#         masks.append(mask)
+#
+#         map = run_image_with_context_augmented(
+#             ldm,
+#             img,
+#             context,
+#             indices.cpu(),
+#             device=device,
+#             from_where=from_where,
+#             layers=layers,
+#             noise_level=noise_level,
+#             augment_degrees=augment_degrees,
+#             augment_scale=augment_scale,
+#             augment_translate=augment_translate,
+#             augmentation_iterations=augmentation_iterations,
+#             visualize=(i == 0),
+#             controllers=controllers,
+#             num_gpus=num_gpus,
+#             save_folder=save_folder,
+#         )
+#
+#         maps.append(map.cpu())
+#     maps = torch.stack(maps)
+#     gt_kpts = torch.stack(gt_kpts)
+#     masks = torch.stack(masks)
+#
+#     if max_loc_strategy == "argmax":
+#         points = find_max_pixel(maps.view(height * width * num_points, 512, 512))
+#     else:
+#         points = pixel_from_weighted_avg(maps.view(height * width * num_points, 512, 512))
+#     points = points.reshape(height * width, num_points, 2)
+#
+#     gt_kpts = gt_kpts[:, :num_points, :]
+#     masks = masks[:, :num_points]
+#
+#     print(maps.shape)
+#     N, K, H, W = maps.shape
+#     if K == 0:
+#         return None, 0, 0
+#     normalize = torch.tile(torch.tensor([[H, W]]), (N, 1))
+#     print("normalize", normalize)
+#
+#     acc, avg_acc, count = keypoint_pck_accuracy(points, gt_kpts, masks, 0.05, normalize)
+#     print(acc, avg_acc, count)
